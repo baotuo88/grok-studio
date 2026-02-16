@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f7fb">
+  <title>Grok Studio - 聊天与图像生成</title>
+
+  <!-- 外部依赖 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/dexie@4.0.1/dist/dexie.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Tailwind 配置 -->
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: '#0EA5E9',
+            accent: '#F97316',
+            bg: '#F4F7FB',
+            panel: '#FFFFFF',
+            card: '#EEF2F7'
+          }
+        }
+      }
+    }
+  </script>
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="bg-layer" aria-hidden="true">
+    <span class="glow glow-a"></span>
+    <span class="glow glow-b"></span>
+    <span class="glow glow-c"></span>
+  </div>
+
+  <!-- 登录界面 -->
+  <div id="loginModal" class="config-modal">
+    <div class="config-content">
+      <h2 class="config-title">
+        <i class="fas fa-user-circle"></i>
+        用户登录
+      </h2>
+
+      <div class="form-group">
+        <label class="form-label">用户名 <span class="required">*</span></label>
+        <input id="loginUsername" type="text" placeholder="请输入用户名" class="form-input" autocomplete="username">
+        <small style="color: #666; margin-top: 4px; display: block;">管理员用户名为 "admin"，普通用户请先注册再登录</small>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">密码 <span class="required">*</span></label>
+        <input id="loginPassword" type="password" placeholder="请输入密码" class="form-input" autocomplete="current-password">
+      </div>
+
+      <div class="form-group hidden" id="registerConfirmPasswordGroup">
+        <label class="form-label">确认密码 <span class="required">*</span></label>
+        <input id="registerConfirmPassword" type="password" placeholder="请再次输入密码" class="form-input" autocomplete="new-password">
+      </div>
+
+      <div class="form-group" id="rememberMeGroup">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input id="rememberMe" type="checkbox" style="width: auto;">
+          <span>记住我（保持登录7天）</span>
+        </label>
+      </div>
+
+      <div class="config-actions">
+        <button id="switchToLogin" class="btn-primary" type="button">登录模式</button>
+        <button id="switchToRegister" class="btn-secondary" type="button">注册模式</button>
+      </div>
+
+      <div class="config-actions">
+        <button id="loginBtn" class="btn-primary" type="button">登录</button>
+      </div>
+
+      <p id="authModeHint" class="config-note">已有账号直接登录，新用户请切换到注册模式</p>
+    </div>
+  </div>
+
+  <!-- 修改密码模态框 -->
+  <div id="changePasswordModal" class="config-modal hidden">
+    <div class="config-content">
+      <h2 class="config-title">
+        <i class="fas fa-key"></i>
+        修改管理员密码
+      </h2>
+
+      <p style="color: #f97316; margin-bottom: 16px; padding: 12px; background: #fff7ed; border-radius: 8px; border-left: 4px solid #f97316;">
+        <i class="fas fa-exclamation-triangle"></i>
+        首次登录必须修改默认密码
+      </p>
+
+      <div class="form-group">
+        <label class="form-label">原密码 <span class="required">*</span></label>
+        <input id="oldPassword" type="password" placeholder="请输入原密码" class="form-input">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">新密码 <span class="required">*</span></label>
+        <input id="newPassword" type="password" placeholder="至少6个字符" class="form-input">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">确认新密码 <span class="required">*</span></label>
+        <input id="confirmPassword" type="password" placeholder="再次输入新密码" class="form-input">
+      </div>
+
+      <div class="config-actions">
+        <button id="savePassword" class="btn-primary" type="button">确认修改</button>
+      </div>
+
+      <p class="config-note">密码修改后请妥善保管，遗失无法找回</p>
+    </div>
+  </div>
+
+  <!-- 用户管理模态框 -->
+  <div id="userManagementModal" class="config-modal hidden">
+    <div class="config-content" style="max-width: 900px;">
+      <h2 class="config-title">
+        <i class="fas fa-users-cog"></i>
+        用户管理
+      </h2>
+
+      <div id="userManagementContent">
+        <!-- 用户列表将在这里动态生成 -->
+      </div>
+
+      <div class="config-actions">
+        <button id="closeUserManagement" class="btn-secondary" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 使用统计模态框 -->
+  <div id="usageStatsModal" class="config-modal hidden">
+    <div class="config-content" style="max-width: 800px;">
+      <h2 class="config-title">
+        <i class="fas fa-chart-bar"></i>
+        使用统计
+      </h2>
+
+      <div id="usageStatsContent">
+        <!-- 统计内容将在这里动态生成 -->
+      </div>
+
+      <div class="config-actions">
+        <button id="closeUsageStats" class="btn-secondary" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 配置模态框 -->
+  <div id="configModal" class="config-modal hidden">
+    <div class="config-content">
+      <h2 class="config-title">
+        <i class="fas fa-cog"></i>
+        API 配置
+      </h2>
+
+      <div class="form-group">
+        <label class="form-label">API Base URL <span class="required">*</span></label>
+        <input id="configBase" type="url" placeholder="https://example.com/v1" class="form-input">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">API Key <span class="required">*</span></label>
+        <input id="configKey" type="password" placeholder="sk-..." class="form-input">
+      </div>
+
+      <div class="config-actions">
+        <button id="saveConfig" class="btn-primary" type="button">保存并继续</button>
+        <button id="closeConfig" class="btn-secondary" type="button">取消</button>
+      </div>
+
+      <p class="config-note">配置仅保存在你的浏览器本地，不会上传到任何服务器</p>
+    </div>
+  </div>
+
+  <!-- 顶部导航 -->
+  <header class="top-nav">
+    <div class="nav-left">
+      <div class="brand" aria-label="Grok Studio">
+        <div class="brand-mark"><i class="fa-solid fa-bolt"></i></div>
+        <div class="brand-copy">
+          <p class="brand-title">Grok Studio</p>
+          <p class="brand-subtitle">Chat + Imagine</p>
+        </div>
+      </div>
+      <button id="openConfig" class="icon-btn" title="设置" type="button">
+        <i class="fas fa-sliders"></i>
+      </button>
+    </div>
+
+    <div class="nav-center" role="tablist" aria-label="功能切换">
+      <button id="tabChat" class="tab-button" type="button" role="tab">
+        <i class="fas fa-comments"></i>
+        <span>聊天</span>
+      </button>
+      <button id="tabImage" class="tab-button active" type="button" role="tab">
+        <i class="fas fa-image"></i>
+        <span>图像生成</span>
+      </button>
+    </div>
+
+    <div class="nav-right">
+      <div id="userInfo" class="user-info hidden">
+        <span id="currentUsername" class="current-username"></span>
+        <button id="userManagementBtn" class="icon-btn" title="用户管理" type="button" style="display: none;">
+          <i class="fas fa-users-cog"></i>
+        </button>
+        <button id="usageStatsBtn" class="icon-btn" title="使用统计" type="button">
+          <i class="fas fa-chart-bar"></i>
+        </button>
+        <button id="changePasswordBtn" class="icon-btn" title="修改密码" type="button" style="display: none;">
+          <i class="fas fa-key"></i>
+        </button>
+        <button id="switchUser" class="icon-btn" title="切换用户" type="button">
+          <i class="fas fa-user-circle"></i>
+        </button>
+        <button id="logoutBtn" class="icon-btn" title="登出" type="button">
+          <i class="fas fa-sign-out-alt"></i>
+        </button>
+      </div>
+      <button id="clearHistory" class="icon-btn danger" title="清除历史" type="button">
+        <i class="fas fa-trash"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- 聊天界面 -->
+  <main id="chatView" class="main-container hidden">
+    <div class="chat-container">
+      <aside class="chat-header">
+        <div class="panel-head">
+          <p class="panel-kicker">对话</p>
+          <h2 class="panel-title">聊天工作台</h2>
+          <p class="panel-subtitle">支持多轮上下文与 Markdown 回复渲染。</p>
+        </div>
+
+        <button id="newChat" class="new-chat-btn" type="button">
+          <i class="fas fa-plus"></i>
+          <span>新对话</span>
+        </button>
+
+        <div class="form-group chat-model-group">
+          <label class="form-label" for="chatModel">
+            <i class="fas fa-robot"></i>
+            模型
+          </label>
+          <select id="chatModel" class="form-select">
+            <option value="">加载模型中...</option>
+          </select>
+        </div>
+
+        <div class="chat-sessions-section">
+          <div class="sessions-header">
+            <span class="sessions-title">历史会话</span>
+          </div>
+          <div id="sessionsList" class="sessions-list">
+            <div class="sessions-empty">暂无历史会话</div>
+          </div>
+        </div>
+
+        <ul class="chat-side-tips">
+          <li><i class="fas fa-circle"></i> Enter 发送，Shift + Enter 换行</li>
+          <li><i class="fas fa-circle"></i> Cmd/Ctrl + Enter 可快速发送</li>
+        </ul>
+      </aside>
+
+      <section class="chat-main">
+        <div id="messagesArea" class="messages-area">
+          <div class="empty-state">
+            <i class="fas fa-comments"></i>
+            <p>开始你的第一条消息</p>
+            <small>可以提问、写作、总结、代码与创意探索</small>
+          </div>
+        </div>
+
+        <div class="chat-input-area">
+          <!-- 文件预览区域 -->
+          <div id="chatFilePreview" class="chat-file-preview hidden">
+            <div id="chatFileList" class="chat-file-list"></div>
+          </div>
+          
+          <div class="chat-input-wrapper">
+            <button id="chatAttachFile" class="chat-attach-btn" type="button" title="上传文件">
+              <i class="fas fa-paperclip"></i>
+            </button>
+            <input type="file" id="chatFileInput" accept="image/*,.pdf,.doc,.docx,.txt,.csv,.json" multiple class="visually-hidden-file">
+            <textarea id="chatInput" class="chat-input" rows="1" placeholder="输入消息，按 Enter 发送" maxlength="4000"></textarea>
+            <div class="chat-input-actions">
+              <span class="chat-char-count"><span id="chatCharCount">0</span> / 4000</span>
+              <button id="sendMessage" class="send-btn" type="button">
+                <i class="fas fa-paper-plane"></i>
+                <span>发送</span>
+              </button>
+            </div>
+          </div>
+          <p class="input-hint">Enter 发送 · Shift + Enter 换行 · Cmd/Ctrl + Enter 快捷发送 · 支持上传图片和文档</p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- 图像生成界面 -->
+  <main id="imageView" class="main-container">
+    <div class="image-container">
+      <aside class="input-panel">
+        <div class="panel-head">
+          <p class="panel-kicker">创作</p>
+          <h2 class="panel-title">图像生成控制台</h2>
+          <p class="panel-subtitle">用提示词 + 参考图快速完成出图、编辑和视频生成。</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="model">
+            <i class="fas fa-robot"></i>
+            模型
+          </label>
+          <select id="model" class="form-select">
+            <option value="">加载模型中...</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="prompt">
+            <i class="fas fa-pen-nib"></i>
+            提示词
+          </label>
+          <textarea id="prompt" class="form-textarea" placeholder="输入详细描述，越具体效果越好...（最多1000字符）" maxlength="1000"></textarea>
+          <div class="prompt-counter">已用 <span id="charCount">0</span> / 最多 1000 字符</div>
+        </div>
+
+        <div class="form-group">
+          <label id="referenceLabel" class="form-label" for="inputImage">
+            <i class="fas fa-image"></i>
+            参考图像（可选）
+          </label>
+          <label for="inputImage" class="upload-dropzone">
+            <i class="fas fa-cloud-upload-alt"></i>
+            <span>拖拽或点击上传参考图</span>
+            <small>编辑模式最多 16 张，单张不超过 10MB</small>
+          </label>
+          <input type="file" id="inputImage" accept="image/*" multiple class="visually-hidden-file">
+
+          <div id="previewContainer" class="preview-container">
+            <div id="previewGrid" class="preview-grid"></div>
+            <div class="preview-meta">已上传 <span id="imageCount">0</span> 张</div>
+            <button id="clearImage" class="clear-preview-btn" type="button" title="清空参考图">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="param-grid">
+          <div id="nParam">
+            <label class="form-label" for="img-n">生成数量</label>
+            <select id="img-n" class="form-select">
+              <option value="1">1 张</option>
+              <option value="2">2 张</option>
+              <option value="3">3 张</option>
+              <option value="4" selected>4 张</option>
+              <option value="6">6 张</option>
+              <option value="8">8 张</option>
+              <option value="10">10 张</option>
+            </select>
+          </div>
+
+          <div id="strengthParam" class="hidden">
+            <label class="form-label" for="strength">变化强度</label>
+            <select id="strength" class="form-select">
+              <option value="0.3">低 (0.3)</option>
+              <option value="0.5">中 (0.5)</option>
+              <option value="0.75" selected>高 (0.75)</option>
+              <option value="0.9">很高 (0.9)</option>
+            </select>
+          </div>
+
+          <div id="aspectParam">
+            <label class="form-label" for="aspect">宽高比</label>
+            <select id="aspect" class="form-select">
+              <option value="1:1">1:1 (方形)</option>
+              <option value="16:9">16:9 (横版)</option>
+              <option value="9:16" selected>9:16 (竖版)</option>
+              <option value="3:2">3:2 (横版经典)</option>
+              <option value="2:3">2:3 (竖版经典)</option>
+            </select>
+          </div>
+
+          <div id="lengthParam" class="hidden">
+            <label class="form-label" for="length">视频时长</label>
+            <select id="length" class="form-select">
+              <option value="6" selected>6 秒</option>
+              <option value="10">10 秒</option>
+              <option value="15">15 秒</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="generateBtn" class="generate-btn" type="button">
+          <i class="fas fa-magic"></i>
+          生成内容
+        </button>
+      </aside>
+
+      <section class="results-panel">
+        <div class="results-header">
+          <div>
+            <p class="panel-kicker">图库</p>
+            <h2 class="panel-title">生成结果</h2>
+            <p class="panel-subtitle">历史结果会自动保存到本地浏览器。</p>
+          </div>
+        </div>
+
+        <div id="results" class="results-grid"></div>
+
+        <div id="empty" class="empty-state">
+          <i class="fas fa-sparkles"></i>
+          <p>结果将显示在这里</p>
+          <small>刷新页面后，历史记录仍会保留</small>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- 生成进度条 -->
+  <div id="generationProgress" class="progress-bar">
+    <i class="fas fa-spinner spinner"></i>
+    <p>生成中，请稍候...</p>
+  </div>
+
+  <!-- 多选操作栏 -->
+  <div id="selectionBar" class="selection-bar hidden">
+    <span>已选中 <span id="selectedCount">0</span> 个</span>
+    <button id="selectAll" class="btn-secondary" type="button">全选</button>
+    <button id="downloadSelected" class="btn-primary" type="button">
+      <i class="fas fa-download"></i>
+      下载选中
+    </button>
+    <button id="deleteSelected" class="btn-danger" type="button">
+      <i class="fas fa-trash"></i>
+      删除选中
+    </button>
+    <button id="cancelSelection" class="btn-secondary" type="button">取消</button>
+  </div>
+
+  <!-- 错误提示 -->
+  <div id="error" class="error-toast hidden">
+    <i class="fas fa-exclamation-triangle"></i>
+    <span id="errorText"></span>
+  </div>
+
+  <!-- 大图预览模态框 -->
+  <div id="imagePreviewModal" class="image-preview-modal hidden">
+    <div class="preview-modal-backdrop"></div>
+    <div class="preview-modal-content">
+      <button id="closePreview" class="preview-close-btn" type="button">
+        <i class="fas fa-times"></i>
+      </button>
+      <button id="prevImage" class="preview-nav-btn prev" type="button">
+        <i class="fas fa-chevron-left"></i>
+      </button>
+      <button id="nextImage" class="preview-nav-btn next" type="button">
+        <i class="fas fa-chevron-right"></i>
+      </button>
+      <div class="preview-image-container">
+        <img id="previewImage" src="" alt="预览图片">
+      </div>
+      <div class="preview-actions">
+        <button id="downloadPreviewImage" class="preview-action-btn primary" type="button">
+          <i class="fas fa-download"></i>
+          <span>下载图片</span>
+        </button>
+        <button id="copyPreviewPrompt" class="preview-action-btn" type="button">
+          <i class="fas fa-copy"></i>
+          <span>复制提示词</span>
+        </button>
+      </div>
+      <div class="preview-info">
+        <span id="previewCounter">1 / 10</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript 模块 -->
+  <script src="js/user.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/history.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/selection.js"></script>
+  <script src="js/generator.js"></script>
+  <script src="js/chat.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
