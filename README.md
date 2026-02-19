@@ -61,7 +61,7 @@
    - 用户名：`admin`
    - 默认密码：`admin123`
    - 首次登录会强制要求修改密码
-   - 修改后的密码会安全保存在本地
+   - 修改后的密码会优先写入 Cloudflare KV（哈希存储），云端不可用时回退本地
 
 ### 管理员功能
 
@@ -113,7 +113,7 @@
 
 - 纯前端实现，无需后端服务器
 - 数据存储在浏览器本地（LocalStorage + IndexedDB）
-- 可选 Cloudflare Pages Functions + KV 云端同步（共享 API 配置、用户列表、用户配额）
+- 可选 Cloudflare Pages Functions + KV 云端同步（共享 API 配置、管理员密码状态、用户列表、用户配额）
 - 响应式设计，支持移动端
 - 现代化 UI，流畅的动画效果
 - 完善的错误处理和用户提示
@@ -121,9 +121,9 @@
 ## 数据安全
 
 - 默认数据仅存储在本地浏览器
-- 启用 Cloudflare KV 后，管理员 API 配置、用户列表、用户配额会同步到云端 KV
+- 启用 Cloudflare KV 后，管理员 API 配置、管理员密码状态、用户列表、用户配额会同步到云端 KV
 - 不同用户数据完全隔离
-- 管理员密码加密存储
+- 管理员密码仅以哈希形式存储
 - 会话自动过期保护
 - 支持一键清除所有数据
 
@@ -186,7 +186,8 @@ netlify deploy
    - 变量名：`GROK_STORE`
    - KV Namespace：新建或选择一个命名空间
 6. （可选）添加环境变量 `ADMIN_WRITE_TOKEN`，用于限制谁可以写入云端配置
-7. 如果设置了 `ADMIN_WRITE_TOKEN`，在浏览器 `localStorage` 写入同名值：
+7. （可选）添加环境变量 `ADMIN_DEFAULT_PASSWORD`，用于覆盖管理员初始密码（默认 `admin123`）
+8. 如果设置了 `ADMIN_WRITE_TOKEN`，在浏览器 `localStorage` 写入同名值：
    - key: `grok_admin_write_token`
    - value: 与 Cloudflare 环境变量一致
 
@@ -292,11 +293,11 @@ server {
    - 部署后首次访问需要管理员登录配置 API
    - 默认保存在浏览器本地；启用 Cloudflare KV 后会自动同步到云端
    - 普通用户若看到“加载模型中”不变化，通常是当前浏览器还没有可用 API 配置
-   - 账号注册/登录依赖 Cloudflare Functions（`/api/auth`）与 KV 绑定 `GROK_STORE`
+   - 账号注册/登录与管理员密码校验依赖 Cloudflare Functions（`/api/auth`）与 KV 绑定 `GROK_STORE`
 
 2. **数据存储**
-   - 聊天记录、图片历史、配额和登录态仍存储在本地浏览器
-   - 启用 Cloudflare KV 后，管理员 API 配置、用户列表、用户配额会跨设备共享
+   - 聊天记录、图片历史和登录态仍存储在本地浏览器
+   - 启用 Cloudflare KV 后，管理员 API 配置、管理员密码状态、用户列表、用户配额会跨设备共享
    - 启用 Cloudflare KV 后，用户每次配额消耗会优先写入云端（管理员面板可实时看到）
    - 清除浏览器数据会导致数据丢失
    - 建议定期导出重要数据
