@@ -1183,7 +1183,7 @@ async function handleChangePassword() {
   }
   
   try {
-    UserManager.changeAdminPassword(oldPassword, newPassword);
+    await UserManager.changeAdminPassword(oldPassword, newPassword);
     hideChangePasswordModal();
     UI.showError('密码修改成功');
     
