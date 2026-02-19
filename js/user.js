@@ -93,10 +93,17 @@ const UserManager = {
   },
 
   /**
+   * 设置管理员首次登录状态
+   */
+  setAdminFirstLoginState(isFirstLogin) {
+    localStorage.setItem(this.ADMIN_FIRST_LOGIN_KEY, isFirstLogin ? 'true' : 'false');
+  },
+
+  /**
    * 标记管理员已完成首次登录
    */
   markAdminFirstLoginComplete() {
-    localStorage.setItem(this.ADMIN_FIRST_LOGIN_KEY, 'false');
+    this.setAdminFirstLoginState(false);
   },
 
   /**
@@ -110,18 +117,45 @@ const UserManager = {
   /**
    * 修改管理员密码
    */
-  changeAdminPassword(oldPassword, newPassword) {
+  async changeAdminPassword(oldPassword, newPassword) {
     if (!this.isAdmin()) {
       throw new Error('只有管理员可以修改密码');
+    }
+
+    if (!newPassword || newPassword.length < 6) {
+      throw new Error('新密码至少需要6个字符');
+    }
+
+    if (oldPassword === newPassword) {
+      throw new Error('新密码不能与原密码相同');
+    }
+
+    let cloudChanged = false;
+    try {
+      const cloudData = await this.requestAuth(
+        'admin_change_password',
+        { oldPassword, newPassword },
+        { allowUnavailable: true }
+      );
+
+      if (cloudData) {
+        this.setAdminFirstLoginState(cloudData?.firstLogin !== false);
+        cloudChanged = true;
+      }
+    } catch (e) {
+      if (!this.shouldFallbackToLocalAdminAuth(e)) {
+        throw e;
+      }
+    }
+
+    if (cloudChanged) {
+      localStorage.setItem(this.ADMIN_PASSWORD_KEY, newPassword);
+      return;
     }
 
     const currentPassword = this.getAdminPassword();
     if (oldPassword !== currentPassword) {
       throw new Error('原密码错误');
-    }
-
-    if (!newPassword || newPassword.length < 6) {
-      throw new Error('新密码至少需要6个字符');
     }
 
     localStorage.setItem(this.ADMIN_PASSWORD_KEY, newPassword);
@@ -182,7 +216,7 @@ const UserManager = {
   /**
    * 请求云端账号接口
    */
-  async requestAuth(action, payload) {
+  async requestAuth(action, payload, options = {}) {
     const data = await this.requestCloud(this.CLOUD_AUTH_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -190,10 +224,22 @@ const UserManager = {
     });
 
     if (data === null) {
+      if (options.allowUnavailable) {
+        return null;
+      }
       throw new Error('云端账号系统不可用，请先在 Cloudflare Pages 部署 Functions 与 KV');
     }
 
     return data;
+  },
+
+  /**
+   * 云端未升级管理员动作时回退本地逻辑
+   */
+  shouldFallbackToLocalAdminAuth(error) {
+    const message = String(error?.message || '');
+    return message.includes('action 必须是 register 或 login')
+      || message.includes('action 必须是 register、login');
   },
 
   /**
@@ -245,14 +291,34 @@ const UserManager = {
 
     let finalUsername = trimmedUsername;
 
-    // 管理员走本地密码
+    // 管理员优先走云端密码（支持跨域名/跨设备），云端不可用时回退本地密码
     if (trimmedUsername === this.ADMIN_USERNAME) {
       if (!password) {
         throw new Error('管理员需要输入密码');
       }
-      const currentPassword = this.getAdminPassword();
-      if (password !== currentPassword) {
-        throw new Error('管理员密码错误');
+
+      let cloudData = null;
+      try {
+        cloudData = await this.requestAuth(
+          'admin_login',
+          { password },
+          { allowUnavailable: true }
+        );
+      } catch (e) {
+        if (!this.shouldFallbackToLocalAdminAuth(e)) {
+          throw e;
+        }
+      }
+
+      if (cloudData) {
+        finalUsername = this.normalizeUsername(cloudData?.username || this.ADMIN_USERNAME)
+          || this.ADMIN_USERNAME;
+        this.setAdminFirstLoginState(cloudData?.firstLogin !== false);
+      } else {
+        const currentPassword = this.getAdminPassword();
+        if (password !== currentPassword) {
+          throw new Error('管理员密码错误');
+        }
       }
     } else {
       this.validateAccountUsername(trimmedUsername);
