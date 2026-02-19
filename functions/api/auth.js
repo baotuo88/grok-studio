@@ -1,7 +1,9 @@
 const USERS_KEY = 'grok_shared_users';
 const ACCOUNT_PREFIX = 'grok_account_';
 const QUOTA_PREFIX = 'grok_quota_';
+const ADMIN_ACCOUNT_KEY = 'grok_admin_account';
 const RESERVED_ADMIN = 'admin';
+const DEFAULT_ADMIN_PASSWORD = 'admin123';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -64,6 +66,25 @@ function quotaKey(username) {
   return `${QUOTA_PREFIX}${username}`;
 }
 
+function getBootstrapAdminPassword(env) {
+  const configured = typeof env?.ADMIN_DEFAULT_PASSWORD === 'string'
+    ? env.ADMIN_DEFAULT_PASSWORD.trim()
+    : '';
+  if (configured.length >= 6) {
+    return configured;
+  }
+  return DEFAULT_ADMIN_PASSWORD;
+}
+
+function isValidAdminAccount(account) {
+  return !!account
+    && typeof account === 'object'
+    && typeof account.passwordHash === 'string'
+    && account.passwordHash.length > 0
+    && typeof account.salt === 'string'
+    && account.salt.length > 0;
+}
+
 function toHex(buffer) {
   const view = new Uint8Array(buffer);
   let out = '';
@@ -122,6 +143,50 @@ async function removeUserFromList(kv, username) {
   } catch (_) {
     // ignore malformed list
   }
+}
+
+async function getAdminAccount(kv) {
+  const raw = await kv.get(ADMIN_ACCOUNT_KEY);
+  if (!raw) {
+    return null;
+  }
+
+  let account;
+  try {
+    account = JSON.parse(raw);
+  } catch (_) {
+    throw new Error('管理员账号数据异常，请联系管理员处理');
+  }
+
+  if (!isValidAdminAccount(account)) {
+    throw new Error('管理员账号数据异常，请联系管理员处理');
+  }
+
+  return account;
+}
+
+async function ensureAdminAccount(kv, env) {
+  const existing = await getAdminAccount(kv);
+  if (existing) {
+    return existing;
+  }
+
+  const salt = randomSalt();
+  const now = Date.now();
+  const account = {
+    username: RESERVED_ADMIN,
+    usernameCanonical: RESERVED_ADMIN,
+    passwordHash: await hashPassword(getBootstrapAdminPassword(env), salt),
+    salt,
+    createdAt: now,
+    updatedAt: now,
+    lastLoginAt: 0,
+    mustChangePassword: true
+  };
+
+  await kv.put(ADMIN_ACCOUNT_KEY, JSON.stringify(account));
+  await ensureUserListContains(kv, RESERVED_ADMIN);
+  return account;
 }
 
 async function handleRegister(kv, body) {
@@ -209,6 +274,89 @@ async function handleLogin(kv, body) {
   return json({ ok: true, username: account.username || username });
 }
 
+async function handleAdminLogin(kv, body, env) {
+  const password = body?.password;
+  const passwordError = validatePassword(password);
+  if (passwordError) {
+    return json({ error: passwordError }, 400);
+  }
+
+  let account;
+  try {
+    account = await ensureAdminAccount(kv, env);
+  } catch (e) {
+    return json({ error: e.message || '管理员账号读取失败' }, 500);
+  }
+
+  const computedHash = await hashPassword(password, account.salt);
+  if (computedHash !== account.passwordHash) {
+    return json({ error: '管理员密码错误' }, 401);
+  }
+
+  const now = Date.now();
+  account.username = RESERVED_ADMIN;
+  account.usernameCanonical = RESERVED_ADMIN;
+  account.lastLoginAt = now;
+  account.updatedAt = now;
+  await kv.put(ADMIN_ACCOUNT_KEY, JSON.stringify(account));
+  await ensureUserListContains(kv, RESERVED_ADMIN);
+
+  return json({
+    ok: true,
+    username: RESERVED_ADMIN,
+    firstLogin: account.mustChangePassword !== false
+  });
+}
+
+async function handleAdminChangePassword(kv, body, env) {
+  const oldPassword = body?.oldPassword;
+  const newPassword = body?.newPassword;
+
+  const oldPasswordError = validatePassword(oldPassword);
+  if (oldPasswordError) {
+    return json({ error: `原密码无效：${oldPasswordError}` }, 400);
+  }
+
+  const newPasswordError = validatePassword(newPassword);
+  if (newPasswordError) {
+    return json({ error: newPasswordError }, 400);
+  }
+
+  if (oldPassword === newPassword) {
+    return json({ error: '新密码不能与原密码相同' }, 400);
+  }
+
+  let account;
+  try {
+    account = await ensureAdminAccount(kv, env);
+  } catch (e) {
+    return json({ error: e.message || '管理员账号读取失败' }, 500);
+  }
+
+  const oldHash = await hashPassword(oldPassword, account.salt);
+  if (oldHash !== account.passwordHash) {
+    return json({ error: '原密码错误' }, 401);
+  }
+
+  const salt = randomSalt();
+  const now = Date.now();
+  account.username = RESERVED_ADMIN;
+  account.usernameCanonical = RESERVED_ADMIN;
+  account.passwordHash = await hashPassword(newPassword, salt);
+  account.salt = salt;
+  account.updatedAt = now;
+  account.lastLoginAt = account.lastLoginAt || now;
+  account.mustChangePassword = false;
+  if (typeof account.createdAt !== 'number') {
+    account.createdAt = now;
+  }
+
+  await kv.put(ADMIN_ACCOUNT_KEY, JSON.stringify(account));
+  await ensureUserListContains(kv, RESERVED_ADMIN);
+
+  return json({ ok: true, username: RESERVED_ADMIN, firstLogin: false });
+}
+
 async function handleDelete(kv, request, env) {
   if (!isWriteAuthorized(request, env)) {
     return json({ error: '未授权写入，请检查 x-admin-token' }, 401);
@@ -264,8 +412,14 @@ export async function onRequest(context) {
     if (action === 'login') {
       return handleLogin(kv, body);
     }
+    if (action === 'admin_login') {
+      return handleAdminLogin(kv, body, env);
+    }
+    if (action === 'admin_change_password') {
+      return handleAdminChangePassword(kv, body, env);
+    }
 
-    return json({ error: 'action 必须是 register 或 login' }, 400);
+    return json({ error: 'action 必须是 register、login、admin_login 或 admin_change_password' }, 400);
   }
 
   if (request.method === 'DELETE') {
